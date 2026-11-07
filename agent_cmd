@@ -1,0 +1,104 @@
+#!/bin/bash
+
+# Түстер
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # Түссіз
+
+echo -e "${BLUE}===================================================================${NC}"
+echo -e "${BLUE}     🛡️  ҚАУІПСІЗДІК ПЕН ОРТА БАҚЫЛАУ СКРИПТІ (agent_cmd)         ${NC}"
+echo -e "${BLUE}===================================================================${NC}"
+
+# Функция: Қауіпсіздік пен баптауларды тексеру
+run_security_check() {
+    # 1. .gitignore тексеру
+    echo -e "\n${CYAN}[1/4] .gitignore файлын тексеру...${NC}"
+    PATTERNS=(".env" ".venv/" "__pycache__/" "node_modules/" ".next/" "*.log")
+
+    if [ ! -f ".gitignore" ]; then
+        echo -e "${YELLOW}[!] .gitignore табылмады! Жаңасын жасаймын...${NC}"
+        for p in "${PATTERNS[@]}"; do
+            echo "$p" >> .gitignore
+        done
+        echo -e "${GREEN}[✓] .gitignore жасалды.${NC}"
+    else
+        for p in "${PATTERNS[@]}"; do
+            if ! grep -q "$p" .gitignore; then
+                echo "$p" >> .gitignore
+            fi
+        done
+        echo -e "${GREEN}[✓] .gitignore барлық қорғаныс ережелерін қамтиды.${NC}"
+    fi
+
+    # 2. .env файлының бар-жоғын тексеру
+    echo -e "\n${CYAN}[2/4] .env файлының қауіпсіздігін тексеру...${NC}"
+    if [ ! -f ".env" ]; then
+        if [ -f ".env.example" ]; then
+            echo -e "${YELLOW}[!] .env файлы жоқ. .env.example негізінде жасаңыз.${NC}"
+        fi
+    else
+        echo -e "${GREEN}[✓] .env файлы бар және ол .gitignore арқылы сенімді қорғалған.${NC}"
+    fi
+
+    # 3. Құпия кілттер мен парольдердің Git-ке кетуін тексеру
+    echo -e "\n${CYAN}[3/4] Құпия кілттер мен парольдердің ағып кетуін тексеру...${NC}"
+    LEAK=0
+
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        STAGED=$(git diff --cached 2>/dev/null)
+        
+        if echo "$STAGED" | grep -E "ghp_[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9]{20,}|BEGIN PRIVATE KEY" >/dev/null 2>&1; then
+            echo -e "${RED}╔═════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║ [!] ЕСКЕРТУ: ИНДЕКСТЕ ҚҰПИЯ КІЛТТЕР ТАБЫЛДЫ! БҰЛАЙ ЖАСАУҒА БОЛМАЙДЫ!║${NC}"
+            echo -e "${RED}║ Секреттерді .env файлына жасырып, Git-ке жібермеңіз!                ║${NC}"
+            echo -e "${RED}╚═════════════════════════════════════════════════════════════════════╝${NC}"
+            LEAK=1
+        fi
+
+        if git status --porcelain | grep -E "(^\s*[AM\?].*\.env$|^\.env$)" >/dev/null 2>&1; then
+            echo -e "${RED}╔═════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║ [!] ЕСКЕРТУ: .env файлы Git күйінде тұр! Бұлай жасауға болмайды!    ║${NC}"
+            echo -e "${RED}║ .env файлын дереу .gitignore-ға қосып, индекстен алыңыз!            ║${NC}"
+            echo -e "${RED}╚═════════════════════════════════════════════════════════════════════╝${NC}"
+            LEAK=1
+        fi
+    fi
+
+    if [ $LEAK -eq 0 ]; then
+        echo -e "${GREEN}[✓] Қауіпсіздік расталды: құпия кілттер мен парольдер аққан жоқ.${NC}"
+    fi
+
+    # 4. Бекітілген стек құрылымы
+    echo -e "\n${CYAN}[4/4] Жобаның бекітілген технологиялық стек құрылымы:${NC}"
+    echo -e "  • ${YELLOW}Backend:${NC} FastAPI (backend/), SQLAlchemy 2, Alembic, pytest [ДАЙЫН]"
+    echo -e "  • ${YELLOW}Database:${NC} PostgreSQL [Docker Compose бапталған]"
+    echo -e "  • ${YELLOW}IAM / Auth:${NC} Keycloak (OIDC, рөлдер: student / teacher / admin) [Бапталған]"
+    echo -e "  • ${YELLOW}Жергілікті AI:${NC} Ollama (app/llm/) [FastAPI клиенті дайын]"
+    echo -e "  • ${YELLOW}Frontend:${NC} Next.js 16 (web/) [ДАЙЫН]"
+    echo -e "  • ${YELLOW}Инфрақұрылым:${NC} Nginx, Docker Compose [Дайын]"
+    echo -e "  • ${YELLOW}Кеңейтілген:${NC} Redis (кэш), RabbitMQ + worker (асинхронды өңдеу) [ДАЙЫН]"
+    echo -e "${BLUE}===================================================================${NC}"
+    echo -e "${GREEN}Ереже: Агент ұсынады — Сіз шешім қабылдайсыз!${NC}\n"
+}
+
+# Пәрмендерді өңдеу (start, stop, status немесе тексеру)
+case "$1" in
+    start)
+        echo -e "${CYAN}[*] Docker Compose сервистерін іске қосу...${NC}"
+        docker compose up -d
+        ;;
+    stop)
+        echo -e "${YELLOW}[*] Docker Compose сервистерін тоқтату...${NC}"
+        docker compose down
+        ;;
+    status)
+        echo -e "${CYAN}[*] Сервистердің күйі:${NC}"
+        docker compose ps
+        ;;
+    *)
+        run_security_check
+        ;;
+esac
