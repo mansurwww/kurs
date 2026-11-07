@@ -1,0 +1,157 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL мәліметтер қоры
+  postgres:
+    image: postgres:16-alpine
+    container_name: edu_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-edu_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-edu_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Keycloak IAM (OIDC: кіру, тіркелу, student/teacher/admin рөлдері)
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: edu_keycloak
+    command: start-dev
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-edu_db}
+      KC_DB_USERNAME: ${POSTGRES_USER:-postgres}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # 3. Redis кэш және сессиялар
+  redis:
+    image: redis:7-alpine
+    container_name: edu_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # 4. RabbitMQ хабарлама кезегі (асинхронды өңдеу)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: edu_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672" # Web Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # 5. Жергілікті LLM — Ollama
+  ollama:
+    image: ollama/ollama:latest
+    container_name: edu_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  # 6. FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: edu_backend
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_SERVER=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-edu_db}
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-edu-realm}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-edu-client}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - REDIS_URL=redis://redis:6379/0
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      ollama:
+        condition: service_started
+
+  # 7. Next.js 16 Frontend
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: edu_web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+      - NEXT_PUBLIC_KEYCLOAK_URL=http://localhost:8080
+      - NEXT_PUBLIC_KEYCLOAK_REALM=edu-realm
+      - NEXT_PUBLIC_KEYCLOAK_CLIENT_ID=edu-client
+    depends_on:
+      - backend
+
+  # 8. RabbitMQ Background Worker (Ollama / асинхронды тапсырмалар)
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: edu_worker
+    restart: unless-stopped
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama3.2
+    depends_on:
+      - rabbitmq
+      - ollama
+
+  # 9. Nginx кері прокси
+  nginx:
+    image: nginx:alpine
+    container_name: edu_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - web
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  ollama_data:
